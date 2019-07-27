@@ -1,0 +1,375 @@
+---
+title: "Electronidex's Market Basket Analysis"
+author: "Kais Kawar"
+date: "29 April 2019"
+output: 
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: spacelab
+---
+
+```{r include=FALSE}
+#Load libraries
+library(ggplot2, quietly = T)
+library(dplyr, quietly = T)
+library(caret, quietly = T)
+library(arules, quietly = T)
+library(arulesViz, quietly = T)
+library(klaR, quietly = T)
+library(RColorBrewer, quietly = T)
+library(shiny, quietly = T)
+library(knitr, quietly = T)
+#library(pander, quietly = T)
+library(kableExtra, quietly = T)
+```
+
+##Summary
+Blackwell Electronics’ board of directors is considering acquiring Electronidex, we are to help them better understand this company’s clientele and if we should acquire them.
+After the analysis of Electronidex past month’s transaction data, it was deduced that this company’s customers are mainly other business and retailers that buy their electronics at this store; whereas Blackwell sells to consumers directly. 
+And from the transactional data, we can see the huge volume of items this company sales in a magnitude far bigger than Blackwell’s.
+The acquisition of Electronidex will prove successful in terms of boosting the sales of Laptops and Desktops, to a high percentage where we will see high rise in revenues and profits. And due to our dominance in Accessory sales, it will boost Electronidex’s sales of that product type; but to achieve these results, a more thorough analysis with different month’s transactions is required to better assess the trends and the statistics with least error margin.
+
+##Business Question
+The board of directors at Blackwell Electronics is considering acquiring Electronidex, a start-up electronics online retailer. We are tasked with helping them better understand Electronidex's clientele and if we should acquire them or not.
+Main objective is to identify the purchasing patterns of Electronidex’s clientele and discovering any interesting relationships (or associations) between customer’s transactions and the item(s) they’ve purchased.
+
+##What is Market Basket Analysis?
+Market Basket Analysis is a modelling technique based upon the theory that if you buy a certain group of items, you are more (or less) likely to buy another group of items. For example, if you are in an English pub and you buy a pint of beer and don't buy a bar meal, you are more likely to buy crisps (US. chips) at the same time than somebody who didn't buy beer.
+The set of items a customer buys is referred to as an __*itemset*__, and market basket analysis seeks to find relationships between purchases.
+Typically the relationship will be in the form of a rule:
+
+> *IF {beer, no bar meal} THEN {crisps}.*
+
+The probability that a customer will buy beer without a bar meal (i.e. that the antecedent is true) is referred to as the __*support*__ for the rule. The conditional probability that a customer will purchase crisps is referred to as the __*confidence*__.
+
+##Processing the Data
+###Data Summary
+In order to analyse the data in R, we use the summary function to see useful information that will help us better understand this data.
+
+```{r message=FALSE, warning=FALSE}
+#Loading transactional file (no attributes)
+df <- read.transactions("data/ElectronidexTransactions2017.csv", 
+                  format = "basket", 
+                  sep=",", 
+                  rm.duplicates=F,
+                  cols = NULL)
+
+#load product categories list
+productCatList <- read.csv("data/ProductCategoryList.csv", sep=",")
+#remove "" as they are not necessary and may give us wrong results
+df@itemInfo$labels <- gsub("\"","",df@itemInfo$labels)
+#add level1 to categories our products
+df@itemInfo$level1 <- productCatList$ProductCategory
+
+#find item that was consumed alone
+oneCat <- df[which(size(df) == 1), ] #2163 items consumed alone
+
+#summary giving us lots of good information
+summary(df)
+
+#plot items frequency
+itemFrequencyPlot(df,
+   topN=10,
+   #col=brewer.pal(8,'Pastel2'),
+   main='Absolute Item Frequency Plot',
+   type="absolute",
+   ylab="Item Frequency (Absolute)")
+```
+
+###Exploratory Visualisation to better understand the data
+
+After analysing the data in R, we created the plot in figure one. It shows the number of times a product was in a unique transaction. The most popular product was the **iMac (Desktop)**, follow by **HP Laptop**. That is good because Blackwell’s laptop and PC sales are struggling.
+
+```{r}
+#Most products in one cat transactions
+barplot(sort(itemFrequency(oneCat, type="absolute"), decreasing=T))
+```
+
+The most popular products that were purchased alone are:
+
+*	Apple MacBook Air was purchased *383*
+*	iMac was purchased *121*
+*	CYBERPOWER GAMER Desktop was purchased *109*
+
+We will use an algorithm called Apriori that will analyse the data and output a set of rules with calculated support, confidence and lift. The higher the confidence and lift are, the better the rule is. 
+
+```{r}
+#run apriori with sup at 0.01 and conf at 0.5
+basket_rules <- apriori(df, parameter = list(sup = 0.01,
+                                             conf = 0.4,
+                                             minlen = 2,
+                                             target="rules"))
+basket_rules
+inspect(head(basket_rules))
+
+```
+
+The scatterplot below shows the distribution of 70 rules generated from all products; we can see the presence of few rules with high confidence and lift. But there is a way to product better performing rules by generalising our data.
+```{r message=FALSE, warning=FALSE}
+#scatter plot of association rules we found use apriori
+plot(basket_rules)
+```
+
+Below is some output showing the top 6 rules found sorted by highest confidence. We can also perform redundancy check to remove any low tier ruleset.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+rules_conf <- sort (basket_rules, by="confidence", decreasing=TRUE) # 'high-confidence' rules.
+inspect(head(rules_conf)) # show the support, lift and confidence for all rules
+
+#check for redundant rules (obsolute)
+is.redundant(basket_rules)
+```
+
+In order to get a better idea on how confidence, support and lift affect one another, the following 2 charts were created
+
+```{r message=FALSE, warning=FALSE}
+#load external csv files 
+changingConf <- read.csv("data/changingconf.csv", sep=",")
+changingSupp <- read.csv("data/changingsupp.csv", sep=",")
+
+#conf vs rules found line graph
+ggplot(data = changingConf, aes(x=minConf, y=numRules))+
+  geom_point()+
+  geom_smooth(se=F, color="#2471A3")+
+  ggtitle("Mean Confidence against Rules found (Min supp. = 0.1)")+
+  xlab("Mean Conf") + 
+  ylab("No. of Rules")+
+  theme_bw()
+```
+
+From the line graph, we can see a clear negative correlation between number of rulesets and confidence. This means that we have less rules the highest the confidence. Since confidence is very important and it measures the probability of how often the ruleset is fulfilled, it means we need to keep this value high.
+
+```{r message=FALSE, warning=FALSE}
+#supp vs rules found line graph
+ggplot(data = changingSupp, aes(x=minSupp, y=numRules))+
+  geom_point()+
+  geom_smooth(se=F, color="#2471A3")+
+  ggtitle("Mean Support against Rules found (Min conf. = 0.4)")+
+  xlab("Mean Supp") + 
+  ylab("No. of Rules")+
+  theme_bw()
+```
+
+When support is plotted against rules found, we see an even sharper decline of rules found with higher support. But because support is more general and only measure the number of transactions containing items to fulfill the right hand side of the ruleset, we wont put alot of emphasis on it being a high value.
+
+```{r warning=FALSE, include=FALSE}
+#Finding the product categories in common between task 4 and task3
+#Running the clustering algorithm, with support at 0.005 and confidence of 0.4
+#we find that only 3 product types make the cut generating 336 rules
+tempDesktop <- c("iMac", "Dell Desktop", "Lenovo Desktop Computer")
+tempLaptop <- c("HP Laptop")
+tempMonitors <- c("ViewSonic Monitor")
+
+#Run apriori algorithm to find how many rules we have
+#predicting next purchase is a Desktop
+ruleGeneral <- apriori(df, parameter = list(sup = 0.005, 
+                                          conf = 0.4, 
+                                          minlen = 2, 
+                                          maxlen = 20))
+
+#Subsetting rules with a desktop in the right hand side 
+#(means that people are more likely to purchase it based on thier current purchases)
+ruleDesktop <- subset(ruleGeneral, subset = rhs %in% tempDesktop)
+```
+
+###Ruleset Discovery for individual products {.tabset .tabset-fade}
+After finding the product categories in common between Blackwell Electronics and Electronidex, we zoom in on each of the 3 common product types and analyze the rules generated based o highest support, confidence and lift.
+
+####Desktop
+
+iMac is performing very well in this product type, this category is decent and can help Blackwell in the future with its struggling PC sales.
+```{r}
+#remove redundant rules
+ruleDesktop <- ruleDesktop[!is.redundant(ruleDesktop)]
+summary(ruleDesktop)
+```
+<details><summary>Expand ruleset output</summary>
+<p>
+
+```{r}
+#Sort by top 15 support/conf/lift
+inspect(sort(ruleDesktop, decreasing = TRUE, by = "support")[1:10])
+inspect(sort(ruleDesktop, decreasing = TRUE, by = "confidence")[1:10])
+inspect(sort(ruleDesktop, decreasing = TRUE, by = "lift")[1:10])
+```
+</p>
+</details>
+
+####Laptop
+
+HP Laptop is performing very well in this product type, this category is decent and can help Blackwell in the future with its struggling laptop sales.
+```{r}
+#Subsetting rules with a Laptop in the right hand side 
+#(means that people are more likely to purchase it based on thier current purchases)
+ruleLaptop <- subset(ruleGeneral, subset = rhs %in% tempLaptop)
+
+#remove redundant rules
+ruleLaptop <- ruleLaptop[!is.redundant(ruleLaptop)]
+summary(ruleLaptop)
+```
+<details><summary>Expand ruleset output</summary>
+<p>
+```{r}
+inspect(sort(ruleLaptop, decreasing = TRUE, by = "support")[1:10])
+inspect(sort(ruleLaptop, decreasing = TRUE, by = "confidence")[1:10])
+inspect(sort(ruleLaptop, decreasing = TRUE, by = "lift")[1:10])
+```
+</p>
+</details>
+
+####Monitors
+
+Looking at the Monitors, we only have good lift, but both support and confidence are at the lower range with only 7 rulesets. Those rules will not be fullfilled often and thus we can opt them out.
+```{r}
+#Subsetting rules with a monitors in the right hand side 
+#(means that people are more likely to purchase it based on thier current purchases)
+ruleMonitors <- subset(ruleGeneral, subset = rhs %in% tempMonitors)
+
+#remove redundant rules
+ruleMonitors <- ruleMonitors[!is.redundant(ruleMonitors)]
+
+summary(ruleMonitors)
+```
+<details><summary>Expand ruleset output</summary>
+<p>
+```{r}
+
+
+#Sort by top 15 support/conf/lift
+inspect(sort(ruleMonitors, decreasing = TRUE, by = "support"))
+inspect(sort(ruleMonitors, decreasing = TRUE, by = "confidence"))
+inspect(sort(ruleMonitors, decreasing = TRUE, by = "lift"))
+```
+</p>
+</details>
+
+###
+
+###Ruleset Discovery for Product Categories
+
+If we group all products into their original product type, we can focus on the items we are interested in analysing, our common product types. The frequency plot below shows the frequency of Product categories in the transaction records. Desktop is still top on the chart, Computer Mic and active headphones follows but Blackwell doesn’t sell these items, so we ignore them.
+
+```{r}
+#aggregate by cats
+dfByType <- aggregate(df, by= df@itemInfo$level1)
+
+#plot items frequency for categories
+itemFrequencyPlot(dfByType,
+                  topN=10,
+                  #col=brewer.pal(8,'Pastel2'),
+                  main='Absolute Item Frequency Plot',
+                  type="absolute",
+                  ylab="Item Frequency (Absolute)")
+```
+
+Running the Apriori algorithm again but this time on the categories, we get a sizable amount of rules, 5000+. In order to clean those out, first we remove the redundant rules. Then we zoom in on the rules that have high confidence and lift. In order to visualize those rules, a scatterplot was created with rules measuring the probability of a desktop being purchased next.
+
+```{r echo=FALSE}
+ruleByType <- apriori(dfByType, parameter = list(sup = 0.005, 
+                                            conf = 0.4, 
+                                            minlen = 3, 
+                                            maxlen = 20))
+
+ruleByBWCats <- subset(ruleByType, subset = rhs %in% c("Desktop", 
+                                                       "Laptops", 
+                                                       "Monitors",
+                                                       "Accessories", 
+                                                       "Computer Tablets",
+                                                       "Printers"))
+#remove duplicates
+ruleByBWCats <- ruleByBWCats[!is.redundant(ruleByBWCats)]
+```
+Summary
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+summary(ruleByBWCats)
+```
+
+Looking at the rulesets for categories, we see higher support, confidence and lift for all sets, this is because we combined product types into different categories.
+<details><summary>Expand ruleset output</summary>
+<p>
+```{r}
+#Sort by top 15 support/conf/lift to explore
+inspect(sort(ruleByBWCats, decreasing = TRUE, by = "support")[1:15])
+inspect(sort(ruleByBWCats, decreasing = TRUE, by = "confidence")[1:15])
+inspect(sort(ruleByBWCats, decreasing = TRUE, by = "lift")[1:15])
+```
+</p>
+</details>
+
+```{r}
+ruleByCatsDesktop <- subset(ruleByType, subset = rhs %in% c("Desktop") & lift > 1.5)
+#remove duplicates
+ruleByCatsDesktop <- ruleByCatsDesktop[!is.redundant(ruleByCatsDesktop)]
+#plot
+plot(ruleByCatsDesktop, measure=c("support", "confidence"), shading="lift", main="Scatterplot of Desktop Rulesets")
+```
+
+From the above plot, we can see that most rules have perfect confidence levels but weak support. In this case we will go for the rules with better lift over support, and focus on the rules with that will generate most transactions.
+
+```{r}
+ruleByCatsLatop <- subset(ruleByType, subset = rhs %in% c("Desktop") & lift > 1.5)
+#remove duplicates
+ruleByCatsLatop <- ruleByCatsLatop[!is.redundant(ruleByCatsLatop)]
+#plot
+plot(ruleByCatsLatop, measure=c("support", "confidence"), shading="lift", main="Scatterplot of Desktop Rulesets")
+```
+
+From this plot, we can tell that laptops have higher number of rules and better support, but lower confidence. We will pick a set of rules with best confidence and lift from here as well in order to boost blackwell’s laptop and PC sales in the future.
+
+##Questions and Answers
+
+###Are there any interesting patterns or item relationships within Electronidex's transactions?
+
+After lots of exploration and going through the generated data sets, we can conclude that the transactions are mainly made by big companies because most item sets are multiple computers and computer necessities like monitors, keyboards, mice, printers.
+Here is an example of a rule set that has decent confidence:
+
+>{Accessories, Headphones, Computer Mice, Tablets, Laptops, Printers}  => {Monitors}
+
+With this knowledge, we conclude that Electronidex is a Business to Business Company. Since our company is Business to consumer Type Company, this will be challenging to merge because we are not compatible in terms of customers
+Since Electronidex is a B2B (Business to business) company, acquiring them will prove to be challenging as we are a different company type that serves consumers mainly. But since we will get the business customers they sell to and the experienced employees working there, this acquisition can prove very profitable and good for the future of our company and its expansion.
+
+###Would Blackwell benefit from selling any of Electronidex's items?
+
+Yes they would, mainly the 6 product types in common (Accessories, monitors, printers, laptops, desktops and tablets). The below table sums up the volume sales of Blackwell’s 6 product types in common with Electronidex.
+
+```{r}
+ProductTypes <- c('Accessories','Display','Printer', 'Tablet','Laptop','PC')
+VolumeSales <- c('25,216','2,428','2,036','948','516','116')
+
+metrics <- data.frame(ProductTypes, VolumeSales) 
+
+kable(metrics) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),fixed_thead = T)
+```
+
+After analysing our current data with that of Electronidex, we deduce that our sales of laptops, PCs and desktops are very weak compared to most of our products; an acquisition of such company will boost the sales of our less popular products and increase our revenues and profits by a big margin.
+Due to not having transactional data for Blackwell’s, an analysis to know if products will benefit Electronidex’s items cannot be done at this time.
+
+###In your opinion, should Blackwell acquire Electronidex?
+
+With our current conclusions, acquiring Electronidex would be risky because their main customers are other businesses. However, if we hire experts in this field, and with the aid of the experienced employees already working at Electronidex, this transition can be made easier and be a great step towards the future of Blackwell’s in branching out to other markets.
+
+###If Blackwell does acquire Electronidex, do you have any recommendations for Blackwell? 
+
+A deeper analysis needs to be done on both company’s products. We will be required to remove the items that are not selling well (because we will have 125 more products after the acquisition). We can also change the locations of the items in our stores based on the market basket analysis, keeping printers, laptops, computer and computer accessories all in close proximity to one another (or as recommended items to buy on the website).
+Furthermore, transactional data from Blackwells will be needed for analysis; we can find additional rulesets that will give us an idea of how Blackwell’s items can benefit Electronidex.
+Also, transactional data with exact volume of each product purchase is essential to know how much profitability and revenue this acquisition will generate.
+
+##Bayes' Theorem
+__Bayes' theorem__ is a formula that describes how to update the probabilities of hypotheses when given evidence. It follows simply from the axioms of conditional probability, but can be used to powerfully reason about a wide range of problems involving belief updates.
+
+Given a hypothesis __*H*__ and evidence __*E*__, Bayes' theorem states that the relationship between the probability of the hypothesis before getting the evidence __*P(H)*__ and the probability of the hypothesis after getting the evidence __*P(H|E)*__ is $$P(H|E)=\frac{P(E|H)}{P(E)} \cdot P(H)$$
+
+Many modern machine learning techniques rely on Bayes' theorem. For instance, spam filters use Bayesian updating to determine whether an email is real or spam, given the words in the email. Additionally, many specific techniques in statistics, such as calculating *p*-values or interpreting medical results, are best described in terms of how they contribute to updating hypotheses using Bayes' theorem.
+
+
+##Conclusions
+
+1.	Electronidex is a business to business company (B2B) meaning they sell to other retailers and business that requires a lot of computers. This was discovered from the transactional records because most transactions had multiple combinations of laptops and PC’s purchased at the same time.
+2.	Laptop rule set has highest support and confidence which means acquiring Electronidex will boost our laptop sales as the rule set is more likely to be fulfilled.
+3.	Eletronidex has 9835 transactions in one month and 125 products in 15 categories; if the acquisition goes through, that will increase the number of products we offer, fulfilling some of the rules we found which will boost the sales of our laptops and desktops at Blackwell. 
+4.	In common product types between Blackwell and Electronidex are: Laptops, Printers, PC, Monitors, Tablets and Accessories.
+5.	We need more information from Electronidex for a more thorough analysis and additional insights if we intend on acquiring the company. More information is needed because one month’s data can be biased based on the season and time of the year, for instance more companies will be restocking on electronics during October and November ahead of Black Friday and Cyber Monday.
